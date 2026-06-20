@@ -208,7 +208,7 @@ install_caelestia() {
 
     # Tiene que ser la versión -git: la versión estable del AUR todavía no
     # incluye el subcomando `caelestia install`.
-    "${AUR_HELPER}" -S --needed caelestia-cli-git
+    "${AUR_HELPER}" -S --needed --noconfirm caelestia-cli-git
 
     info "Ejecutando 'caelestia install'..."
     caelestia install
@@ -227,35 +227,75 @@ apply_dotfiles() {
     info "Clonando dotfiles personales..."
     git clone --depth=1 "${DOTS_REPO}" "${DOTS_TMP}"
 
+    # Detectamos dinámicamente las carpetas de nivel superior del repo
+    # (hypr, kitty, fish, btop, cava, wal, ...). Así no hace falta mantener
+    # una lista hardcodeada ni excluir README/LICENSE/install.sh: esos son
+    # archivos sueltos en la raíz del repo, no carpetas, y el glob */ los
+    # ignora automáticamente.
+    local managed_folders=()
+    for d in "${DOTS_TMP}"/*/; do
+        [[ -d "${d}" ]] || continue
+        managed_folders+=("$(basename "${d}")")
+    done
+
+    if [[ ${#managed_folders[@]} -eq 0 ]]; then
+        die "No se encontraron carpetas en el repo de dotfiles, abortando."
+    fi
+
     # Caelestia deja varias carpetas (hypr, kitty, fish, btop) como symlinks
-    # hacia ~/.local/share/caelestia/. Nuestra config es la versión completa
-    # (no un parche), así que hacemos backup del contenido real
-    # (dereferenciando symlinks) antes de que rsync escriba encima.
-    info "Respaldando configs existentes antes de sincronizar..."
+    # hacia ~/.local/share/caelestia/. Queremos CONSERVAR esos symlinks (para
+    # no romper la integración con Caelestia), pero vaciar por completo el
+    # contenido real al que apuntan, para que la sincronización posterior sea
+    # un reemplazo total y no un merge. Las carpetas que no son symlinks
+    # (directorios normales) sí se borran y se recrean vacías.
+    info "Respaldando y vaciando configs existentes antes de sincronizar..."
     mkdir -p "${BACKUP_DIR}"
-    for folder in hypr kitty fish btop cava wal; do
+    for folder in "${managed_folders[@]}"; do
         local dst="${CONFIG_DIR}/${folder}"
-        if [[ -L "${dst}" || -e "${dst}" ]]; then
+
+        if [[ -L "${dst}" ]]; then
+            # Es un symlink (caso Caelestia): respaldamos el contenido real
+            # y vaciamos el directorio destino, SIN tocar el enlace.
+            local real_target
+            real_target="$(readlink -f "${dst}")"
+
+            if [[ -d "${real_target}" ]]; then
+                local bk="${BACKUP_DIR}/${folder}"
+                mkdir -p "$(dirname "${bk}")"
+                if cp -a "${real_target}/." "${bk}/" 2>/dev/null; then
+                    info "  Backup: ${dst} (→ ${real_target}) → ${bk}"
+                else
+                    warn "  No se pudo respaldar ${real_target}, continuando."
+                fi
+                # Vacía el contenido real (incluye archivos ocultos) pero
+                # conserva el symlink ${dst} -> ${real_target} intacto.
+                find "${real_target}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+                ok "  Symlink conservado: ${dst} → ${real_target} (vaciado)"
+            else
+                warn "  Symlink roto en ${dst}, lo recreo como carpeta normal."
+                rm -f "${dst}"
+                mkdir -p "${dst}"
+            fi
+
+        elif [[ -e "${dst}" ]]; then
+            # Directorio (u otro archivo) normal, sin symlink que conservar.
             local bk="${BACKUP_DIR}/${folder}"
             mkdir -p "$(dirname "${bk}")"
-            if cp -aL "${dst}" "${bk}" 2>/dev/null; then
+            if cp -a "${dst}" "${bk}" 2>/dev/null; then
                 info "  Backup: ${dst} → ${bk}"
             else
-                warn "  No se pudo respaldar ${dst} (symlink roto o sin permisos), continuando."
+                warn "  No se pudo respaldar ${dst}, continuando."
             fi
-            # Si era un symlink (caso Caelestia), lo quitamos para que rsync
-            # no escriba a través de él hacia el directorio de Caelestia.
-            [[ -L "${dst}" ]] && rm -f "${dst}"
+            rm -rf "${dst}"
         fi
     done
 
-    info "Aplicando dotfiles con rsync sobre ${CONFIG_DIR}..."
-    rsync -av \
-        --exclude='.git' \
-        --exclude='README*' \
-        --exclude='install.sh' \
-        --exclude='LICENSE*' \
-        "${DOTS_TMP}/" "${CONFIG_DIR}/"
+    info "Aplicando dotfiles (reemplazo total, carpeta por carpeta)..."
+    for folder in "${managed_folders[@]}"; do
+        mkdir -p "${CONFIG_DIR}/${folder}"
+        rsync -a --delete "${DOTS_TMP}/${folder}/" "${CONFIG_DIR}/${folder}/"
+        ok "  Reemplazado: ${CONFIG_DIR}/${folder}"
+    done
 
     # Permisos de ejecución para todos los scripts
     info "Aplicando permisos de ejecución a scripts de wal/..."
