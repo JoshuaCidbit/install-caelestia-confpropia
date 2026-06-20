@@ -345,18 +345,58 @@ configure_input() {
     ok "  sensitivity → 0"
 }
 
-# ── 5. Carpeta de wallpapers ──────────────────────────────────────────────────
+# ── 5. Configuración de monitores ─────────────────────────────────────────────
+reset_monitors_config() {
+    info "Limpiando hypr/modules/monitors.lua..."
+
+    local monitors_file="${CONFIG_DIR}/hypr/modules/monitors.lua"
+    mkdir -p "$(dirname "${monitors_file}")"
+
+    cat > "${monitors_file}" <<'EOF'
+-- ============================================================
+--  modules/monitors.lua
+-- ============================================================
+-- Este archivo se dejó intencionalmente vacío de configuración.
+--
+-- La configuración de monitores (resolución, posición, refresco,
+-- escalado) depende de CADA equipo. Un valor "de fábrica" aquí
+-- puede causar problemas como: el launcher de Caelestia sin
+-- contenido, colores de wallpaper que no se generan, o texto
+-- que no se renderiza bien en Firefox/apps (por escalado mal
+-- aplicado).
+--
+-- Antes de configurar tus monitores, ejecuta en una terminal:
+--
+--     hyprctl monitors
+--
+-- Eso te dará el nombre, resolución, tasa de refresco y posición
+-- de cada monitor conectado. Con esos datos, agrega tu propio
+-- bloque hl.config({ monitor = { ... } }) en este archivo según
+-- la documentación de Hyprland 0.55 (Lua config / hl.config).
+
+hl.config({})
+EOF
+
+    ok "  monitors.lua reseteado. Ejecuta 'hyprctl monitors' y configura el tuyo manualmente."
+}
+
+# ── 6. Carpeta de wallpapers ──────────────────────────────────────────────────
 ensure_wallpaper_dir() {
     info "Creando carpeta de wallpapers (si no existe)..."
     mkdir -p "${HOME}/Pictures/wallpapers/1080p"
     ok "  ${HOME}/Pictures/wallpapers/1080p lista."
 }
 
-# ── 6. Servicios del sistema ──────────────────────────────────────────────────
+# ── 7. Servicios del sistema ──────────────────────────────────────────────────
 enable_services() {
     info "Habilitando servicios del sistema..."
 
-    # Servicios a nivel sistema (requieren sudo)
+    # Servicios a nivel sistema (requieren sudo). En vez de pre-filtrar con
+    # `systemctl list-unit-files | grep`, intentamos habilitar/iniciar
+    # directamente: ese grep era frágil (formato de columnas, unidades vía
+    # socket-activation, alias, etc.) y terminaba saltándose servicios que
+    # sí existían. Si ya estaba activo, lo reiniciamos para asegurar que
+    # tome la configuración recién aplicada.
     local system_services=(
         sddm            # Display manager (login gráfico)
         bluetooth       # Bluetooth
@@ -365,11 +405,11 @@ enable_services() {
     )
 
     for svc in "${system_services[@]}"; do
-        if systemctl list-unit-files --type=service | grep -q "^${svc}.service"; then
-            sudo systemctl enable --now "${svc}"
-            ok "  Habilitado: ${svc}"
+        if sudo systemctl enable --now "${svc}" 2>/dev/null; then
+            sudo systemctl restart "${svc}" 2>/dev/null || true
+            ok "  Habilitado y (re)iniciado: ${svc}"
         else
-            warn "  Servicio no encontrado, saltando: ${svc}"
+            warn "  No se pudo habilitar/iniciar ${svc} (revisa si el paquete lo instaló)."
         fi
     done
 
@@ -382,7 +422,8 @@ enable_services() {
         ok "  UFW configurado (deny incoming / allow outgoing)."
     fi
 
-    # Servicios a nivel usuario (sin sudo, corren en la sesión)
+    # Servicios a nivel usuario (sin sudo, corren en la sesión). Mismo
+    # criterio: intentar directamente en vez de pre-filtrar con grep.
     local user_services=(
         pipewire        # Servidor de audio principal
         pipewire-pulse  # Compatibilidad con PulseAudio
@@ -391,11 +432,11 @@ enable_services() {
 
     info "Habilitando servicios de usuario..."
     for svc in "${user_services[@]}"; do
-        if systemctl --user list-unit-files --type=service | grep -q "^${svc}.service"; then
-            systemctl --user enable --now "${svc}"
-            ok "  Habilitado (user): ${svc}"
+        if systemctl --user enable --now "${svc}" 2>/dev/null; then
+            systemctl --user restart "${svc}" 2>/dev/null || true
+            ok "  Habilitado y (re)iniciado (user): ${svc}"
         else
-            warn "  Servicio de usuario no encontrado, saltando: ${svc}"
+            warn "  No se pudo habilitar/iniciar (user) ${svc} (puede usar activación por socket, revisa manualmente)."
         fi
     done
 
@@ -418,10 +459,11 @@ print_summary() {
     echo "  Pasos que se ejecutarán:"
     echo "    1. Instalar dependencias (pacman + ${aur_label})"
     echo "    2. Instalar Caelestia (caelestia-cli-git + caelestia install)"
-    echo "    3. Aplicar dotfiles personales con rsync (con backup automático)"
+    echo "    3. Aplicar dotfiles personales (reemplazo total, conservando symlinks)"
     echo "    4. Configurar layout de teclado y sensibilidad del mouse"
-    echo "    5. Crear ~/Pictures/wallpapers/1080p"
-    echo "    6. Habilitar servicios del sistema"
+    echo "    5. Resetear hypr/modules/monitors.lua (configúralo tú con hyprctl monitors)"
+    echo "    6. Crear ~/Pictures/wallpapers/1080p"
+    echo "    7. Habilitar/(re)iniciar servicios del sistema"
     echo ""
     echo -e "${YELLOW}  AVISO: Se instalarán paquetes y se modificará ~/.config${RESET}"
     echo ""
@@ -442,7 +484,11 @@ print_done() {
     echo -e "  ${BOLD}2. Agregar wallpapers${RESET} para el launcher de Caelestia:"
     echo "     ~/Pictures/wallpapers/1080p/ (número impar de imágenes)"
     echo ""
-    echo -e "  ${BOLD}3. Reiniciar sesión${RESET} (logout o reboot) para cargar Hyprland con SDDM."
+    echo -e "  ${BOLD}3. Configurar tus monitores${RESET} (se dejó vacío a propósito):"
+    echo "     hyprctl monitors"
+    echo "     → edita ~/.config/hypr/modules/monitors.lua con esos datos"
+    echo ""
+    echo -e "  ${BOLD}4. Reiniciar sesión${RESET} (logout o reboot) para cargar Hyprland con SDDM."
     echo ""
     if [[ -d "${BACKUP_DIR:-}" ]]; then
         echo -e "  ${YELLOW}Tus configs anteriores están en: ${BACKUP_DIR}${RESET}"
@@ -466,6 +512,7 @@ main() {
     install_caelestia
     apply_dotfiles
     configure_input
+    reset_monitors_config
     ensure_wallpaper_dir
     enable_services
 
