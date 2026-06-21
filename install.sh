@@ -360,10 +360,7 @@ reset_monitors_config() {
 --
 -- La configuración de monitores (resolución, posición, refresco,
 -- escalado) depende de CADA equipo. Un valor "de fábrica" aquí
--- puede causar problemas como: el launcher de Caelestia sin
--- contenido, colores de wallpaper que no se generan, o texto
--- que no se renderiza bien en Firefox/apps (por escalado mal
--- aplicado).
+-- puede causar problemas.
 --
 -- Antes de configurar tus monitores, ejecuta en una terminal:
 --
@@ -372,9 +369,18 @@ reset_monitors_config() {
 -- Eso te dará el nombre, resolución, tasa de refresco y posición
 -- de cada monitor conectado. Con esos datos, agrega tu propio
 -- bloque hl.config({ monitor = { ... } }) en este archivo según
--- la documentación de Hyprland 0.55 (Lua config / hl.config).
+-- la documentación de Hyprland
+-- te dejo una base:
 
-hl.config({})
+hl.monitor({
+--    output   = "nombre del monitor",
+--    mode     = "preferred / resolucion y refresh del monitor",
+--    position = "0x0",
+--    scale    = 1,
+})
+
+-- nota: si tienes 2 o mas agregalo de la misma manera, solo cambia los valores
+
 EOF
 
     ok "  monitors.lua reseteado. Ejecuta 'hyprctl monitors' y configura el tuyo manualmente."
