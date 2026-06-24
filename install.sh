@@ -182,7 +182,7 @@ install_deps() {
     # Paquetes AUR (no están en repos oficiales)
     local aur_pkgs=(
         awww             # Wallpaper daemon (animados estáticos)
-	mpvpaper
+	    mpvpaper
 
         # Requeridos por hypr/modules/auto-start.lua
         polkit-gnome          # agente de autenticación polkit
