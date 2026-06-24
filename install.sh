@@ -345,38 +345,14 @@ configure_input() {
     ok "  sensitivity → 0"
 }
 
-# ── 5. Configuración de monitores ─────────────────────────────────────────────
-reset_monitors_config() {
-    info "Limpiando hypr/modules/monitors.lua..."
-
-    local monitors_file="${CONFIG_DIR}/hypr/modules/monitors.lua"
-    mkdir -p "$(dirname "${monitors_file}")"
-
-    cat > "${monitors_file}" <<'EOF'
-
-local vars = require("variables")
-
-hl.monitor({
-    output   = vars.monitorMode,
-    mode     = vars.monitorMode,
-    position = vars.monitorPosition,
-    scale    = 1,
-})
-
-
-EOF
-
-    ok "  monitors.lua reseteado. Ejecuta 'hyprctl monitors' y configura el tuyo manualmente."
-}
-
-# ── 6. Carpeta de wallpapers ──────────────────────────────────────────────────
+# ── 5. Carpeta de wallpapers ──────────────────────────────────────────────────
 ensure_wallpaper_dir() {
     info "Creando carpeta de wallpapers (si no existe)..."
     mkdir -p "${HOME}/Pictures/wallpapers/1080p"
     ok "  ${HOME}/Pictures/wallpapers/1080p lista."
 }
 
-# ── 7. Servicios del sistema ──────────────────────────────────────────────────
+# ── 6. Servicios del sistema ──────────────────────────────────────────────────
 enable_services() {
     info "Habilitando servicios del sistema..."
 
