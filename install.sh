@@ -353,40 +353,16 @@ reset_monitors_config() {
     mkdir -p "$(dirname "${monitors_file}")"
 
     cat > "${monitors_file}" <<'EOF'
--- ============================================================
---  modules/monitors.lua
--- ============================================================
--- Este archivo se dejó intencionalmente vacío de configuración.
---
--- La configuración de monitores (resolución, posición, refresco,
--- escalado) depende de CADA equipo. Un valor "de fábrica" aquí
--- puede causar problemas.
---
--- Antes de configurar tus monitores, ejecuta en una terminal:
---
---     hyprctl monitors
---
--- Eso te dará el nombre, resolución, tasa de refresco y posición
--- de cada monitor conectado. Con esos datos, agrega tu propio
--- bloque hl.config({ monitor = { ... } }) en este archivo según
--- la documentación de Hyprland
--- te dejo una base de como funciona :D:
--- o deja la conf base que deje abajo de eso (cambiala si el refresh esta mal etc etc)
 
---    output   = "nombre del monitor",
---    mode     = "preferred / resolucion y refresh del monitor",
---    position = "0x0",
---    scale    = 1,
+local vars = require("variables")
 
--- Default monitor conf
 hl.monitor({
-    output   = "",
-    mode     = "preferred",
-    position = "auto",
+    output   = vars.monitorMode,
+    mode     = vars.monitorMode,
+    position = vars.monitorPosition,
     scale    = 1,
 })
 
--- nota: si tienes 2 o mas agregalo de la misma manera, solo cambia los valores
 
 EOF
 
