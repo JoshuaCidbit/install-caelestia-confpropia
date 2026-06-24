@@ -370,13 +370,20 @@ reset_monitors_config() {
 -- de cada monitor conectado. Con esos datos, agrega tu propio
 -- bloque hl.config({ monitor = { ... } }) en este archivo según
 -- la documentación de Hyprland
--- te dejo una base:
+-- te dejo una base de como funciona :D:
+-- o deja la conf base que deje abajo de eso (cambiala si el refresh esta mal etc etc)
 
-hl.monitor({
 --    output   = "nombre del monitor",
 --    mode     = "preferred / resolucion y refresh del monitor",
 --    position = "0x0",
 --    scale    = 1,
+
+-- Default monitor conf
+hl.monitor({
+    output   = "",
+    mode     = "preferred",
+    position = "auto",
+    scale    = 1,
 })
 
 -- nota: si tienes 2 o mas agregalo de la misma manera, solo cambia los valores
