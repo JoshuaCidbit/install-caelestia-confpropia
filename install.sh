@@ -34,7 +34,6 @@ error() { echo -e "${RED}${BOLD}[ERR ]${RESET}  $*" >&2; }
 die()   { error "$*"; exit 1; }
 
 ask() {
-    # Pregunta sí/no interactiva. Devuelve 0 (true) si el usuario responde s/si/sí.
     echo -en "${BOLD}$1 [s/N]: ${RESET}"
     read -r reply
     [[ "${reply,,}" == "s" || "${reply,,}" == "si" || "${reply,,}" == "sí" ]]
@@ -42,6 +41,7 @@ ask() {
 
 # ── Limpieza en caso de interrupción ─────────────────────────────────────────
 DOTS_TMP=""
+BACKUP_DIR=""
 cleanup() {
     if [[ -n "${DOTS_TMP}" && -d "${DOTS_TMP}" ]]; then
         warn "Limpiando archivos temporales..."
@@ -53,7 +53,6 @@ trap cleanup EXIT INT TERM
 # ── 0. Verificaciones previas ─────────────────────────────────────────────────
 
 check_not_root() {
-    # El script debe correr como usuario normal; sudo se llama internamente
     if [[ "${EUID}" -eq 0 ]]; then
         die "No corras el script como root. Usa tu usuario normal; el script pedirá sudo cuando sea necesario."
     fi
@@ -91,16 +90,25 @@ check_script_deps() {
     ok "Dependencias del script presentes."
 }
 
+# ── Resolución de usuario real ────────────────────────────────────────────────
+# Soporta tanto `sudo ./install.sh` (SUDO_USER disponible)
+# como `./install.sh` con sudo interno (SUDO_USER vacío, usamos $USER).
+resolve_real_user() {
+    REAL_USER="${SUDO_USER:-${USER}}"
+    if [[ -z "${REAL_USER}" || "${REAL_USER}" == "root" ]]; then
+        die "No se pudo determinar el usuario real. Corre el script como tu usuario normal."
+    fi
+    ok "Usuario real detectado: ${REAL_USER}"
+}
+
 # ── 1. Dependencias del sistema ───────────────────────────────────────────────
 install_deps() {
     info "Instalando dependencias del sistema..."
 
-    # Paquetes de repositorios oficiales
     local pacman_pkgs=(
-
-	# yay por si no lo tiene
-	yay
-
+        # YAY
+        yay
+        
         # Terminal
         kitty
         alacritty
@@ -117,10 +125,11 @@ install_deps() {
         cava
         playerctl
         pavucontrol
+        pipewire
         pipewire-alsa
         pipewire-pulse
         wireplumber
-	ffnvcodec-headers
+        ffnvcodec-headers
 
         # Wayland / Display
         rofi
@@ -139,7 +148,7 @@ install_deps() {
         btop
         socat
         jq
-        libnotify        # provee notify-send para notificaciones
+        libnotify
 
         # Multimedia
         ffmpegthumbnailer
@@ -160,36 +169,30 @@ install_deps() {
         wl-clipboard
         qpwgraph
 
-	# Gamemode
-	gamemode
+        # Gamemode
+        gamemode
 
         # Requeridos por hypr/modules/auto-start.lua
-        gnome-keyring         # gnome-keyring-daemon (secrets para Firefox/NM)
-        geoclue               # ubicación para gammastep
-        gammastep              # night light
-        trash-cli              # trash-empty
-        adw-gtk-theme           # tema GTK adw-gtk3-dark
-        papirus-icon-theme      # iconos Papirus-Dark
-        hyprpicker              # color picker (SUPER+SHIFT+C)
+        gnome-keyring
+        geoclue
+        gammastep
+        trash-cli
+        adw-gtk-theme
+        papirus-icon-theme
+        hyprpicker
 
         # Requeridos por hypr/hyprland.lua (binds)
         nautilus
         firefox
-        qt6ct                 # QT_QPA_PLATFORMTHEME=qt6ct
-
+        qt6ct
     )
 
-    # Paquetes AUR (no están en repos oficiales)
     local aur_pkgs=(
-        awww             # Wallpaper daemon (animados estáticos)
-	    mpvpaper
-
-        # Requeridos por hypr/modules/auto-start.lua
-        polkit-gnome          # agente de autenticación polkit
-        cliphist              # historial de clipboard
-        bibata-cursor-theme   # cursor Bibata-Modern-Classic
-
-        # Requerido por hypr/hyprland.lua (bind de screenshot)
+        awww
+        mpvpaper
+        polkit-gnome
+        cliphist
+        bibata-cursor-theme
         grimblast-git
     )
 
@@ -205,33 +208,48 @@ install_deps() {
 # ── 2. Caelestia ─────────────────────────────────────────────────────────────
 install_caelestia() {
     info "Instalando Caelestia (caelestia-cli-git)..."
-
-    # Tiene que ser la versión -git: la versión estable del AUR todavía no
-    # incluye el subcomando `caelestia install`.
     "${AUR_HELPER}" -S --needed --noconfirm caelestia-cli-git
 
     info "Ejecutando 'caelestia install'..."
-    caelestia install
 
-    ok "Caelestia instalado."
+    # Si da error de LANG/LC_ALL en un locale no generado, forzamos UTF-8
+    if ! caelestia install 2>/tmp/caelestia_install.err; then
+        local err
+        err="$(cat /tmp/caelestia_install.err)"
+
+        # Detectamos si el error es de locale
+        if echo "${err}" | grep -qiE "locale|lang|cannot set|LC_"; then
+            warn "Error de locale detectado. Reintentando con locale seguro (C.UTF-8)..."
+            if LANG=C.UTF-8 LC_ALL=C.UTF-8 LC_MESSAGES=C.UTF-8 caelestia install; then
+                ok "Caelestia instalado (con locale C.UTF-8)."
+                warn "Considera agregar a tu ~/.bashrc o ~/.zshrc:"
+                warn "  export LANG=es_MX.UTF-8  # o el locale que tengas generado"
+                warn "  Verifica con: locale -a | grep es_MX"
+            else
+                die "caelestia install falló incluso con locale C.UTF-8. Revisa /tmp/caelestia_install.err"
+            fi
+        else
+            # Otro tipo de error — lo mostramos y abortamos
+            error "caelestia install falló con el siguiente error:"
+            echo "${err}" >&2
+            die "Revisa el error anterior y vuelve a intentarlo."
+        fi
+    else
+        ok "Caelestia instalado."
+    fi
 }
 
 # ── 3. Dotfiles personales ────────────────────────────────────────────────────
 DOTS_REPO="https://github.com/JoshuaCidbit/cachyos-hyprland-config.git"
 CONFIG_DIR="${HOME}/.config"
-BACKUP_DIR="${HOME}/.config-backup-$(date +%Y%m%d_%H%M%S)"
 
 apply_dotfiles() {
+    BACKUP_DIR="${HOME}/.config-backup-$(date +%Y%m%d_%H%M%S)"
     DOTS_TMP="$(mktemp -d /tmp/joshua-dots-XXXXXX)"
 
     info "Clonando dotfiles personales..."
     git clone --depth=1 "${DOTS_REPO}" "${DOTS_TMP}"
 
-    # Detectamos dinámicamente las carpetas de nivel superior del repo
-    # (hypr, kitty, fish, btop, cava, wal, ...). Así no hace falta mantener
-    # una lista hardcodeada ni excluir README/LICENSE/install.sh: esos son
-    # archivos sueltos en la raíz del repo, no carpetas, y el glob */ los
-    # ignora automáticamente.
     local managed_folders=()
     for d in "${DOTS_TMP}"/*/; do
         [[ -d "${d}" ]] || continue
@@ -242,20 +260,12 @@ apply_dotfiles() {
         die "No se encontraron carpetas en el repo de dotfiles, abortando."
     fi
 
-    # Caelestia deja varias carpetas (hypr, kitty, fish, btop) como symlinks
-    # hacia ~/.local/share/caelestia/. Queremos CONSERVAR esos symlinks (para
-    # no romper la integración con Caelestia), pero vaciar por completo el
-    # contenido real al que apuntan, para que la sincronización posterior sea
-    # un reemplazo total y no un merge. Las carpetas que no son symlinks
-    # (directorios normales) sí se borran y se recrean vacías.
     info "Respaldando y vaciando configs existentes antes de sincronizar..."
     mkdir -p "${BACKUP_DIR}"
     for folder in "${managed_folders[@]}"; do
         local dst="${CONFIG_DIR}/${folder}"
 
         if [[ -L "${dst}" ]]; then
-            # Es un symlink (caso Caelestia): respaldamos el contenido real
-            # y vaciamos el directorio destino, SIN tocar el enlace.
             local real_target
             real_target="$(readlink -f "${dst}")"
 
@@ -267,8 +277,6 @@ apply_dotfiles() {
                 else
                     warn "  No se pudo respaldar ${real_target}, continuando."
                 fi
-                # Vacía el contenido real (incluye archivos ocultos) pero
-                # conserva el symlink ${dst} -> ${real_target} intacto.
                 find "${real_target}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
                 ok "  Symlink conservado: ${dst} → ${real_target} (vaciado)"
             else
@@ -278,7 +286,6 @@ apply_dotfiles() {
             fi
 
         elif [[ -e "${dst}" ]]; then
-            # Directorio (u otro archivo) normal, sin symlink que conservar.
             local bk="${BACKUP_DIR}/${folder}"
             mkdir -p "$(dirname "${bk}")"
             if cp -a "${dst}" "${bk}" 2>/dev/null; then
@@ -297,7 +304,6 @@ apply_dotfiles() {
         ok "  Reemplazado: ${CONFIG_DIR}/${folder}"
     done
 
-    # Permisos de ejecución para todos los scripts
     info "Aplicando permisos de ejecución a scripts de wal/..."
     chmod +x "${CONFIG_DIR}/wal/bin/"*.sh     2>/dev/null || true
     chmod +x "${CONFIG_DIR}/wal/lib/"*.sh     2>/dev/null || true
@@ -306,11 +312,11 @@ apply_dotfiles() {
     # Si el backup quedó vacío (instalación limpia), no lo dejamos
     if [[ -z "$(ls -A "${BACKUP_DIR}" 2>/dev/null)" ]]; then
         rm -rf "${BACKUP_DIR}"
+        BACKUP_DIR=""
     else
         warn "Backups de configs anteriores guardados en: ${BACKUP_DIR}"
     fi
 
-    # El trap de EXIT limpia DOTS_TMP automáticamente
     ok "Dotfiles aplicados."
 }
 
@@ -327,7 +333,7 @@ configure_input() {
     local kb_layout="us"
     echo ""
     echo -e "${BOLD}¿Qué layout de teclado quieres usar?${RESET}"
-    echo "  [1] Inglés      (us)"
+    echo "  [1] Inglés        (us)"
     echo "  [2] Español/Latam (latam)"
     echo -en "${BOLD}Selecciona [1/2]: ${RESET}"
     read -r layout_choice
@@ -356,14 +362,7 @@ ensure_wallpaper_dir() {
 enable_services() {
     info "Habilitando servicios del sistema..."
 
-    # Servicios a nivel sistema (requieren sudo). En vez de pre-filtrar con
-    # `systemctl list-unit-files | grep`, intentamos habilitar/iniciar
-    # directamente: ese grep era frágil (formato de columnas, unidades vía
-    # socket-activation, alias, etc.) y terminaba saltándose servicios que
-    # sí existían. Si ya estaba activo, lo reiniciamos para asegurar que
-    # tome la configuración recién aplicada.
     local system_services=(
-        sddm            # Display manager (login gráfico)
         bluetooth       # Bluetooth
         NetworkManager  # Gestión de red
         ufw             # Firewall
@@ -387,25 +386,32 @@ enable_services() {
         ok "  UFW configurado (deny incoming / allow outgoing)."
     fi
 
-    # Servicios a nivel usuario (sin sudo, corren en la sesión). Mismo
-    # criterio: intentar directamente en vez de pre-filtrar con grep.
+    # Servicios de usuario
     local user_services=(
-        pipewire        # Servidor de audio principal
-        pipewire-pulse  # Compatibilidad con PulseAudio
-        wireplumber     # Session manager de PipeWire
+        pipewire
+        pipewire-pulse
+        wireplumber
     )
 
-    info "Habilitando servicios de usuario..."
+    info "Habilitando servicios de usuario para ${REAL_USER} (arrancarán al hacer login)..."
     for svc in "${user_services[@]}"; do
-        if systemctl --user enable --now "${svc}" 2>/dev/null; then
-            systemctl --user restart "${svc}" 2>/dev/null || true
-            ok "  Habilitado y (re)iniciado (user): ${svc}"
+        if su - "${REAL_USER}" -c "systemctl --user enable ${svc}" 2>/dev/null; then
+            ok "  Habilitado (user): ${svc}"
         else
-            warn "  No se pudo habilitar/iniciar (user) ${svc} (puede usar activación por socket, revisa manualmente)."
+            warn "  No se pudo habilitar ${svc} — revisa manualmente tras login."
         fi
     done
 
-    ok "Servicios configurados."
+    # linger: los servicios de usuario arrancan en boot sin sesión interactiva
+    loginctl enable-linger "${REAL_USER}"
+    ok "  Linger habilitado para ${REAL_USER}."
+
+    # SDDM 
+    if sudo systemctl enable --now sddm; then
+        ok "  SDDM habilitado e iniciado."
+    else
+        warn "  No se pudo iniciar SDDM automáticamente. Puedes iniciarlo con: sudo systemctl start sddm"
+    fi
 }
 
 # ── Pantalla de bienvenida ────────────────────────────────────────────────────
@@ -426,9 +432,8 @@ print_summary() {
     echo "    2. Instalar Caelestia (caelestia-cli-git + caelestia install)"
     echo "    3. Aplicar dotfiles personales (reemplazo total, conservando symlinks)"
     echo "    4. Configurar layout de teclado y sensibilidad del mouse"
-    echo "    5. Resetear hypr/modules/monitors.lua (configúralo tú con hyprctl monitors)"
-    echo "    6. Crear ~/Pictures/wallpapers/1080p"
-    echo "    7. Habilitar/(re)iniciar servicios del sistema"
+    echo "    5. Crear ~/Pictures/wallpapers/1080p"
+    echo "    6. Habilitar/(re)iniciar servicios del sistema"
     echo ""
     echo -e "${YELLOW}  AVISO: Se instalarán paquetes y se modificará ~/.config${RESET}"
     echo ""
@@ -447,15 +452,11 @@ print_done() {
     echo "     wal -i ~/Pictures/wallpapers/1080p/<tu-imagen>"
     echo ""
     echo -e "  ${BOLD}2. Agregar wallpapers${RESET} para el launcher de Caelestia:"
-    echo "     ~/Pictures/wallpapers/1080p/ (número impar de imágenes)"
+    echo "     ~/Pictures/wallpapers/1080p/"
     echo ""
-    echo -e "  ${BOLD}3. Configurar tus monitores${RESET} (se dejó vacío a propósito):"
-    echo "     hyprctl monitors"
-    echo "     → edita ~/.config/hypr/modules/monitors.lua con esos datos"
+    echo -e "  ${BOLD}3. Reiniciar sesión${RESET} (logout o reboot) para cargar Hyprland con SDDM."
     echo ""
-    echo -e "  ${BOLD}4. Reiniciar sesión${RESET} (logout o reboot) para cargar Hyprland con SDDM."
-    echo ""
-    if [[ -d "${BACKUP_DIR:-}" ]]; then
+    if [[ -n "${BACKUP_DIR}" && -d "${BACKUP_DIR}" ]]; then
         echo -e "  ${YELLOW}Tus configs anteriores están en: ${BACKUP_DIR}${RESET}"
         echo ""
     fi
@@ -466,6 +467,7 @@ main() {
     check_not_root
     check_distro
     detect_aur_helper
+    resolve_real_user
 
     print_summary
     ask "¿Deseas continuar con la instalación?" || { info "Instalación cancelada."; exit 0; }
@@ -477,7 +479,6 @@ main() {
     install_caelestia
     apply_dotfiles
     configure_input
-    reset_monitors_config
     ensure_wallpaper_dir
     enable_services
 
