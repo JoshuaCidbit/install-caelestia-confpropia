@@ -406,11 +406,30 @@ enable_services() {
     loginctl enable-linger "${REAL_USER}"
     ok "  Linger habilitado para ${REAL_USER}."
 
-    # SDDM 
-    if sudo systemctl enable --now sddm; then
-        ok "  SDDM habilitado e iniciado."
+    # SDDM
+    info "Configurando SDDM como display manager..."
+    
+    # Deshabilitar cualquier otro DM que pudiera estar activo
+    for dm in gdm lightdm ly greetd lxdm; do
+        if systemctl is-enabled "$dm" &>/dev/null; then
+            warn "  Deshabilitando $dm (conflicto con SDDM)..."
+            sudo systemctl disable --now "$dm" 2>/dev/null || true
+        fi
+    done
+    
+    # Habilitar
+    if sudo systemctl enable sddm 2>/dev/null; then
+        ok "  SDDM habilitado (arrancará en el próximo boot)."
     else
-        warn "  No se pudo iniciar SDDM automáticamente. Puedes iniciarlo con: sudo systemctl start sddm"
+        warn "  No se pudo habilitar SDDM."
+    fi
+    
+    # Iniciar ahora (sesión actual)
+    if sudo systemctl start sddm.service 2>/dev/null; then
+        ok "  SDDM iniciado."
+    else
+        warn "  No se pudo iniciar SDDM ahora — pero quedó habilitado para el próximo boot."
+        warn "  Si estás en TTY puedes correr: sudo systemctl start sddm"
     fi
 }
 
