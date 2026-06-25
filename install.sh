@@ -206,38 +206,7 @@ install_deps() {
 }
 
 # ── 2. Caelestia ─────────────────────────────────────────────────────────────
-install_caelestia() {
-    info "Instalando Caelestia (caelestia-cli-git)..."
-    "${AUR_HELPER}" -S --needed --noconfirm caelestia-cli-git
-
-    info "Ejecutando 'caelestia install'..."
-
-    # Si da error de LANG/LC_ALL en un locale no generado, forzamos UTF-8
-    if ! caelestia install 2>/tmp/caelestia_install.err; then
-        local err
-        err="$(cat /tmp/caelestia_install.err)"
-
-        # Detectamos si el error es de locale
-        if echo "${err}" | grep -qiE "locale|lang|cannot set|LC_"; then
-            warn "Error de locale detectado. Reintentando con locale seguro (C.UTF-8)..."
-            if LANG=C.UTF-8 LC_ALL=C.UTF-8 LC_MESSAGES=C.UTF-8 caelestia install; then
-                ok "Caelestia instalado (con locale C.UTF-8)."
-                warn "Considera agregar a tu ~/.bashrc o ~/.zshrc:"
-                warn "  export LANG=es_MX.UTF-8  # o el locale que tengas generado"
-                warn "  Verifica con: locale -a | grep es_MX"
-            else
-                die "caelestia install falló incluso con locale C.UTF-8. Revisa /tmp/caelestia_install.err"
-            fi
-        else
-            # Otro tipo de error — lo mostramos y abortamos
-            error "caelestia install falló con el siguiente error:"
-            echo "${err}" >&2
-            die "Revisa el error anterior y vuelve a intentarlo."
-        fi
-    else
-        ok "Caelestia instalado."
-    fi
-}
+# mejor instalar caelestia antes de ejecutar el programa (muchos errores)
 
 # ── 3. Dotfiles personales ────────────────────────────────────────────────────
 DOTS_REPO="https://github.com/JoshuaCidbit/cachyos-hyprland-config.git"
