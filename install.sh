@@ -464,7 +464,6 @@ main() {
     check_script_deps
 
     install_deps
-    install_caelestia
     apply_dotfiles
     configure_input
     ensure_wallpaper_dir
