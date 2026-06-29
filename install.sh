@@ -333,9 +333,9 @@ enable_services() {
     info "Habilitando servicios del sistema..."
 
     local system_services=(
-        bluetooth       # Bluetooth
-        NetworkManager  # Gestión de red
-        ufw             # Firewall
+        bluetooth
+        NetworkManager
+        ufw
     )
 
     for svc in "${system_services[@]}"; do
@@ -343,39 +343,65 @@ enable_services() {
             sudo systemctl restart "${svc}" 2>/dev/null || true
             ok "  Habilitado y (re)iniciado: ${svc}"
         else
-            warn "  No se pudo habilitar/iniciar ${svc} (revisa si el paquete lo instaló)."
+            warn "  No se pudo habilitar/iniciar ${svc}."
         fi
     done
 
-    # UFW: política básica para workstation
     if command -v ufw &>/dev/null; then
         info "Configurando UFW..."
         sudo ufw default deny incoming
         sudo ufw default allow outgoing
         sudo ufw --force enable
-        ok "  UFW configurado (deny incoming / allow outgoing)."
+        ok "  UFW configurado."
     fi
 
-    # Servicios de usuario
     local user_services=(
         pipewire
         pipewire-pulse
         wireplumber
     )
 
-    info "Habilitando servicios de usuario para ${REAL_USER} (arrancarán al hacer login)..."
+    # Obtener UID del usuario real para construir XDG_RUNTIME_DIR
+    local real_uid
+    real_uid="$(id -u "${REAL_USER}")"
+    local runtime_dir="/run/user/${real_uid}"
+
+    info "Habilitando servicios de usuario para ${REAL_USER}..."
     for svc in "${user_services[@]}"; do
-        if su - "${REAL_USER}" -c "systemctl --user enable ${svc}" 2>/dev/null; then
-            ok "  Habilitado (user): ${svc}"
+        # Usar machinectl si está disponible (más limpio con D-Bus completo)
+        if command -v machinectl &>/dev/null && sudo machinectl shell \
+            "${REAL_USER}@" /bin/systemctl --user enable "${svc}" &>/dev/null; then
+            ok "  Habilitado (user, machinectl): ${svc}"
+
+        # Fallback: exportar XDG_RUNTIME_DIR manualmente
+        elif sudo -u "${REAL_USER}" \
+            XDG_RUNTIME_DIR="${runtime_dir}" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=${runtime_dir}/bus" \
+            systemctl --user enable "${svc}" 2>/dev/null; then
+            ok "  Habilitado (user, sudo): ${svc}"
+
+        # Último recurso: habilitar vía systemctl system-level preset
         else
-            warn "  No se pudo habilitar ${svc} — revisa manualmente tras login."
+            warn "  No se pudo habilitar ${svc} en vivo."
+            warn "  Forzando enable con symlink directo..."
+            local unit_path
+            unit_path="$(sudo -u "${REAL_USER}" systemctl --user show -p FragmentPath "${svc}" \
+                2>/dev/null | cut -d= -f2)"
+            if [[ -n "${unit_path}" ]]; then
+                local wants_dir="/home/${REAL_USER}/.config/systemd/user/default.target.wants"
+                sudo -u "${REAL_USER}" mkdir -p "${wants_dir}"
+                sudo -u "${REAL_USER}" ln -sf "${unit_path}" "${wants_dir}/${svc}.service" 2>/dev/null \
+                    && ok "  Symlink creado: ${wants_dir}/${svc}.service" \
+                    || warn "  Falló el symlink también — habilita ${svc} manualmente tras login."
+            else
+                warn "  No se encontró unit ${svc} — revisa manualmente tras login."
+            fi
         fi
     done
 
-    # linger: los servicios de usuario arrancan en boot sin sesión interactiva
     loginctl enable-linger "${REAL_USER}"
     ok "  Linger habilitado para ${REAL_USER}."
-
+    
     # SDDM
     info "Configurando SDDM como display manager..."
     
