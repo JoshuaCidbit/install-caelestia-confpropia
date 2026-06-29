@@ -412,11 +412,21 @@ configure_sddm_sync() {
     local theme_path="/usr/share/sddm/themes/${SDDM_THEME_NAME}"
     local sync_bin="/usr/local/bin/sddm-${SDDM_THEME_NAME}-sync.sh"
     local sudoers_file="/etc/sudoers.d/sddm-${SDDM_THEME_NAME}-sync"
+    local theme_conf_dir="/etc/sddm.conf.d"
+    local theme_conf_file="${theme_conf_dir}/theme.conf"
 
     if [[ ! -d "${theme_path}" ]]; then
         warn "  No se encontró ${theme_path}. ¿Está instalado el theme '${SDDM_THEME_NAME}'? Saltando."
         return 0
     fi
+
+    info "  Estableciendo '${SDDM_THEME_NAME}' como theme activo de SDDM..."
+    sudo mkdir -p "${theme_conf_dir}"
+    sudo tee "${theme_conf_file}" > /dev/null <<EOF
+[Theme]
+Current=${SDDM_THEME_NAME}
+EOF
+    ok "  Theme activo configurado en ${theme_conf_file}."
 
     info "  Instalando wrapper en ${sync_bin}..."
     sudo tee "${sync_bin}" > /dev/null <<EOF
