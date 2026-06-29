@@ -292,9 +292,9 @@ apply_dotfiles() {
 
 # ── 4. Configuración de input (teclado + sensibilidad) ───────────────────────
 configure_input() {
-    info "Configurando hypr/modules/input.lua..."
+    info "Configurando hypr/hyprland/input.lua..."
 
-    local input_file="${CONFIG_DIR}/hypr/hyperland/input.lua"
+    local input_file="${CONFIG_DIR}/hypr/hyprland/input.lua"
     if [[ ! -f "${input_file}" ]]; then
         warn "No se encontró ${input_file}, saltando configuración de input."
         return 0
