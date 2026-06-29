@@ -194,6 +194,7 @@ install_deps() {
         cliphist
         bibata-cursor-theme
         grimblast-git
+        pixie-sddm-git
     )
 
     info "  [pacman] Instalando paquetes oficiales..."
@@ -402,6 +403,56 @@ enable_services() {
     fi
 }
 
+# ── 7. Sincronización de wallpaper/colores con SDDM (theme pixie) ────────────
+SDDM_THEME_NAME="pixie"
+
+configure_sddm_sync() {
+    info "Configurando sincronización automática de SDDM (theme: ${SDDM_THEME_NAME})..."
+
+    local theme_path="/usr/share/sddm/themes/${SDDM_THEME_NAME}"
+    local sync_bin="/usr/local/bin/sddm-${SDDM_THEME_NAME}-sync.sh"
+    local sudoers_file="/etc/sudoers.d/sddm-${SDDM_THEME_NAME}-sync"
+
+    if [[ ! -d "${theme_path}" ]]; then
+        warn "  No se encontró ${theme_path}. ¿Está instalado el theme '${SDDM_THEME_NAME}'? Saltando."
+        return 0
+    fi
+
+    info "  Instalando wrapper en ${sync_bin}..."
+    sudo tee "${sync_bin}" > /dev/null <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+SRC="/home/${REAL_USER}/.cache/wal"
+DEST="${theme_path}"
+
+cp -f "\$SRC/sddm_background.jpg" "\$DEST/assets/background.jpg"
+cp -f "\$SRC/sddm_theme.conf" "\$DEST/theme.conf"
+EOF
+    sudo chmod 755 "${sync_bin}"
+    ok "  Wrapper instalado."
+
+    info "  Configurando sudoers (NOPASSWD restringido a ese script exacto)..."
+    echo "${REAL_USER} ALL=(root) NOPASSWD: ${sync_bin}" | sudo tee "${sudoers_file}" > /dev/null
+    sudo chmod 440 "${sudoers_file}"
+    if sudo visudo -cf "${sudoers_file}" &>/dev/null; then
+        ok "  Sudoers válido y aplicado."
+    else
+        error "  El archivo sudoers generado es inválido, eliminando por seguridad."
+        sudo rm -f "${sudoers_file}"
+        return 1
+    fi
+
+    local tpl_file="${CONFIG_DIR}/wal/templates/sddm_theme.conf.tpl"
+    if [[ ! -f "${tpl_file}" ]]; then
+        warn "  No se encontró ${tpl_file} en los dotfiles. Generándolo desde el theme.conf actual..."
+        mkdir -p "$(dirname "${tpl_file}")"
+        cp "${theme_path}/theme.conf" "${tpl_file}"
+        warn "  ⚠ Edita ${tpl_file} y reemplaza colores con %PRIMARY% %ACCENT% %BACKGROUND% %TEXT%"
+    fi
+
+    ok "  Sincronización SDDM lista (sin password) para el theme '${SDDM_THEME_NAME}'."
+}
+
 # ── Pantalla de bienvenida ────────────────────────────────────────────────────
 print_summary() {
     local aur_label="${AUR_HELPER:-yay/paru}"
@@ -422,6 +473,7 @@ print_summary() {
     echo "    4. Configurar layout de teclado y sensibilidad del mouse"
     echo "    5. Crear ~/Pictures/wallpapers/1080p"
     echo "    6. Habilitar/(re)iniciar servicios del sistema"
+    echo "    7. Configurar sincronización automática SDDM (wallpaper + colores)"
     echo ""
     echo -e "${YELLOW}  AVISO: Se instalarán paquetes y se modificará ~/.config${RESET}"
     echo ""
@@ -468,6 +520,7 @@ main() {
     configure_input
     ensure_wallpaper_dir
     enable_services
+    configure_sddm_sync
 
     print_done
 }
