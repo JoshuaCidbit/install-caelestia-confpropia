@@ -292,9 +292,9 @@ apply_dotfiles() {
 
 # ── 4. Configuración de input (teclado + sensibilidad) ───────────────────────
 configure_input() {
-    info "Configurando hypr/hyperland/input.lua..."
+    info "Configurando hypr/modules/input.lua..."
 
-    local input_file="${CONFIG_DIR}/hypr/hyperland/input.lua"
+    local input_file="${CONFIG_DIR}/hypr/modules/input.lua"
     if [[ ! -f "${input_file}" ]]; then
         warn "No se encontró ${input_file}, saltando configuración de input."
         return 0
@@ -312,9 +312,14 @@ configure_input() {
         *) kb_layout="us" ;;
     esac
 
-    sed -i \
-        -e "s/kb_layout[[:space:]]*=[[:space:]]*\"[^\"]*\"/kb_layout         = \"${kb_layout}\"/" \
-        -e "s/sensitivity[[:space:]]*=[[:space:]]*-\?[0-9.]\+/sensitivity = 0/" \
+    # kb_layout: reemplaza el valor entre comillas
+    sed -i -E \
+        's/(kb_layout[[:space:]]*=[[:space:]]*)"[^"]*"/\1"'"${kb_layout}"'"/' \
+        "${input_file}"
+
+    # sensitivity: reemplaza el valor numérico (positivo, negativo o cero) antes de la coma
+    sed -i -E \
+        's/(sensitivity[[:space:]]*=[[:space:]]*)-?[0-9]+(\.[0-9]+)?([[:space:]]*,)/\10\3/' \
         "${input_file}"
 
     ok "  kb_layout   → ${kb_layout}"
