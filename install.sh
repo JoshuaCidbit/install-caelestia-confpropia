@@ -294,7 +294,7 @@ apply_dotfiles() {
 configure_input() {
     info "Configurando hypr/modules/input.lua..."
 
-    local input_file="${CONFIG_DIR}/hypr/modules/input.lua"
+    local input_file="${CONFIG_DIR}/hypr/hyperland/input.lua"
     if [[ ! -f "${input_file}" ]]; then
         warn "No se encontró ${input_file}, saltando configuración de input."
         return 0
