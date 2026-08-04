@@ -133,7 +133,6 @@ install_deps() {
 
         # Wayland / Display
         rofi
-        flameshot
         xdg-desktop-portal-hyprland
 
         # Theming
