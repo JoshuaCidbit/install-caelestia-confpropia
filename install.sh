@@ -135,9 +135,6 @@ install_deps() {
         rofi
         xdg-desktop-portal-hyprland
 
-        # Theming
-        python-pywal
-
         # Utilidades sistema
         duf
         ripgrep
@@ -194,6 +191,7 @@ install_deps() {
         bibata-cursor-theme
         grimblast-git
         pixie-sddm-git
+        python-pywal
     )
 
     info "  [pacman] Instalando paquetes oficiales..."
