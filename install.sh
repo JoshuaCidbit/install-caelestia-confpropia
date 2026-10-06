@@ -106,6 +106,10 @@ install_deps() {
     info "Instalando dependencias del sistema..."
 
     local pacman_pkgs=(
+
+        # Quickshell
+        quickshell
+        
         # YAY
         yay
         
