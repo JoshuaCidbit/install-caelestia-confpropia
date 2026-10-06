@@ -514,6 +514,8 @@ print_summary() {
     echo "    7. Configurar sincronización automática SDDM (wallpaper + colores)"
     echo ""
     echo -e "${YELLOW}  AVISO: Se instalarán paquetes y se modificará ~/.config${RESET}"
+    echo -e "${YELLOW}  RECUERDA: Tener Caelestia instalado${RESET}"
+    echo -e "  yay -S caelestia-shell y despues caelestia install"
     echo ""
 }
 
