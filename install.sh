@@ -6,7 +6,7 @@
 #  Qué hace este script, en orden:
 #    1. Verifica distro y herramientas necesarias (git, curl, yay/paru)
 #    2. Instala dependencias del sistema (pacman + AUR)
-#    3. Instala Caelestia vía AUR (caelestia-cli-git) + `caelestia install`
+#    3. Instala Caelestia vía AUR (caelestia-cli) + `caelestia install`
 #    4. Aplica dotfiles personales encima de Caelestia con rsync
 #    5. Configura layout de teclado y sensibilidad en hypr/modules/input.lua
 #    6. Crea ~/Pictures/wallpapers/1080p para evitar errores de wal
@@ -98,7 +98,17 @@ resolve_real_user() {
     if [[ -z "${REAL_USER}" || "${REAL_USER}" == "root" ]]; then
         die "No se pudo determinar el usuario real. Corre el script como tu usuario normal."
     fi
+    REAL_HOME="$(getent passwd "${REAL_USER}" | cut -d: -f6)"
     ok "Usuario real detectado: ${REAL_USER}"
+}
+
+check_caelestia() {
+    info "Verificando Caelestia..."
+    if command -v caelestia &>/dev/null; then
+        ok "Caelestia detectado: $(command -v caelestia)"
+    else
+        die "Caelestia no está instalado (requisito previo).\n  Instalalo con:\n    ${AUR_HELPER:-yay} -S caelestia-cli\n    caelestia install\n  Luego vuelve a ejecutar este script."
+    fi
 }
 
 # ── 1. Dependencias del sistema ───────────────────────────────────────────────
@@ -109,9 +119,6 @@ install_deps() {
 
         # Quickshell
         quickshell
-        
-        # YAY
-        yay
         
         # Terminal
         kitty
@@ -195,7 +202,7 @@ install_deps() {
         bibata-cursor-theme
         grimblast-git
         pixie-sddm-git
-        python-pywal
+        python-pywal16
     )
 
     info "  [pacman] Instalando paquetes oficiales..."
@@ -208,15 +215,77 @@ install_deps() {
 }
 
 # ── 2. Caelestia ─────────────────────────────────────────────────────────────
-# mejor instalar caelestia antes de ejecutar el programa (muchos errores)
+# Instala Caelestia desde el paquete estable de AUR (caelestia-cli, ya no hace
+# falta la version -git) y ejecuta `caelestia install`. Luego verifica quickshell:
+# Caelestia puede instalarlo desde su repo propio (p.ej. nocatalia), en cuyo caso
+# se elimina y se instala el quickshell oficial.
+
+configure_quickshell() {
+    info "Verificando quickshell (versión oficial)..."
+
+    if pacman -Q quickshell &>/dev/null; then
+        ok "  quickshell ya está instalado."
+
+        # Caelestia suele instalar quickshell desde su repo propio (p.ej. nocatalia).
+        local qs_repo="core"
+        local installer_file="/var/lib/pacman/local/quickshell/INSTALLER"
+        if [[ -f "${installer_file}" ]]; then
+            qs_repo="$(<"${installer_file}")"
+        fi
+
+        local qs_repo_clean="${qs_repo,,}"
+        if [[ "${qs_repo_clean}" != "core" && "${qs_repo_clean}" != "extra" && "${qs_repo_clean}" != "multilib" ]]; then
+            warn "  quickshell proviene del repo '${qs_repo}' (instalación de Caelestia probable)."
+            info "  Eliminando quickshell de '${qs_repo}' e instalando la versión oficial..."
+            sudo pacman -Rns --noconfirm quickshell
+            sudo pacman -S --needed --noconfirm quickshell
+        fi
+        ok "  Quickshell en versión oficial."
+
+    else
+        info "  quickshell no estaba instalado; instalándolo..."
+        sudo pacman -S --needed --noconfirm quickshell
+    fi
+}
+
+configure_caelestia() {
+    info "Instalando Caelestia..."
+
+    if ! command -v caelestia &>/dev/null; then
+        info "  [${AUR_HELPER}] Instalando Caelestia (caelestia-cli)..."
+        "${AUR_HELPER}" -S --needed --noconfirm caelestia-cli
+        ok "  Caelestia CLI instalado."
+    fi
+
+    info "  Ejecutando 'caelestia install'..."
+    caelestia install
+
+    ok "  Caelestia instalado correctamente."
+
+    configure_quickshell
+}
 
 # ── 3. Dotfiles personales ────────────────────────────────────────────────────
-DOTS_REPO="https://github.com/JoshuaCidbit/cachyos-hyprland-config.git"
+DOTS_REPO="${DOTS_REPO:-https://github.com/JoshuaCidbit/cachyos-hyprland-config.git}"
 CONFIG_DIR="${HOME}/.config"
 
 apply_dotfiles() {
     BACKUP_DIR="${HOME}/.config-backup-$(date +%Y%m%d_%H%M%S)"
     DOTS_TMP="$(mktemp -d /tmp/joshua-dots-XXXXXX)"
+
+    # Respaldo completo previo antes de reemplazar cualquier config
+    if [[ -d "${HOME}/.config" && ! -e "${HOME}/.config.bak" ]]; then
+        info "Creando backup completo de ~/.config → ~/.config.bak..."
+        cp -a "${HOME}/.config" "${HOME}/.config.bak"
+        ok "  Backup completo creado en ${HOME}/.config.bak"
+    fi
+
+    info "Repo de dotfiles configurables: ${DOTS_REPO}"
+
+    if ! ask "¿Clonar y aplicar el repo de dotfiles '${DOTS_REPO}'?"; then
+        info "Aplicación de dotfiles omitida por el usuario."
+        return 0
+    fi
 
     info "Clonando dotfiles personales..."
     git clone --depth=1 "${DOTS_REPO}" "${DOTS_TMP}"
@@ -323,8 +392,17 @@ configure_input() {
         's/(sensitivity[[:space:]]*=[[:space:]]*)-?[0-9]+(\.[0-9]+)?([[:space:]]*,)/\10\3/' \
         "${input_file}"
 
-    ok "  kb_layout   → ${kb_layout}"
-    ok "  sensitivity → 0"
+    if grep -qE "kb_layout[[:space:]]*=[[:space:]]*\"${kb_layout}\"" "${input_file}"; then
+        ok "  kb_layout   → ${kb_layout}"
+    else
+        warn "  No se encontró ni actualizó kb_layout en ${input_file}. Revisa el archivo manualmente."
+    fi
+
+    if grep -qE "sensitivity[[:space:]]*=[[:space:]]*-?[0-9]+(\.[0-9]+)?" "${input_file}"; then
+        ok "  sensitivity → 0"
+    else
+        warn "  No se encontró ni actualizó sensitivity en ${input_file}. Revisa el archivo manualmente."
+    fi
 }
 
 # ── 5. Carpeta de wallpapers ──────────────────────────────────────────────────
@@ -344,7 +422,26 @@ enable_services() {
         ufw
     )
 
+    # Advertencia visible y confirmación separada antes de tocar red / firewall
+    echo ""
+    echo -e "${YELLOW}${BOLD}╔══════════════════════════════════════════════╗${RESET}"
+    echo -e "${YELLOW}${BOLD}║        ADVERTENCIA: RED / SSH / FIREWALL     ║${RESET}"
+    echo -e "${YELLOW}${BOLD}╚══════════════════════════════════════════════╝${RESET}"
+    echo -e "  - Se habilitará NetworkManager."
+    echo -e "  - Se configurará UFW con política default DENY incoming."
+    echo -e "  - Si estás conectado por SSH, el firewall podría cortarte el acceso."
+    echo ""
+    local red_ok=false
+    if ask "¿Continuar con la configuración de red / firewall (NetworkManager / UFW / SSH)?"; then
+        red_ok=true
+    fi
+
     for svc in "${system_services[@]}"; do
+        # NetworkManager: solo habilitar, sin reiniciar (evita cortar la conexión activa, p.ej. SSH)
+        if [[ "${svc}" == "NetworkManager" && "${red_ok}" != "true" ]]; then
+            warn "  Saltando NetworkManager (no fue confirmado)."
+            continue
+        fi
         if sudo systemctl enable --now "${svc}" 2>/dev/null; then
             sudo systemctl restart "${svc}" 2>/dev/null || true
             ok "  Habilitado y (re)iniciado: ${svc}"
@@ -354,11 +451,16 @@ enable_services() {
     done
 
     if command -v ufw &>/dev/null; then
-        info "Configurando UFW..."
-        sudo ufw default deny incoming
-        sudo ufw default allow outgoing
-        sudo ufw --force enable
-        ok "  UFW configurado."
+        if [[ "${red_ok}" == "true" ]]; then
+            info "Configurando UFW..."
+            sudo ufw default deny incoming
+            sudo ufw default allow outgoing
+            sudo ufw allow ssh
+            sudo ufw --force enable
+            ok "  UFW configurado."
+        else
+            warn "  Saltando configuración de UFW (no fue confirmado)."
+        fi
     fi
 
     local user_services=(
@@ -394,7 +496,7 @@ enable_services() {
             unit_path="$(sudo -u "${REAL_USER}" systemctl --user show -p FragmentPath "${svc}" \
                 2>/dev/null | cut -d= -f2)"
             if [[ -n "${unit_path}" ]]; then
-                local wants_dir="/home/${REAL_USER}/.config/systemd/user/default.target.wants"
+                local wants_dir="${REAL_HOME}/.config/systemd/user/default.target.wants"
                 sudo -u "${REAL_USER}" mkdir -p "${wants_dir}"
                 sudo -u "${REAL_USER}" ln -sf "${unit_path}" "${wants_dir}/${svc}.service" 2>/dev/null \
                     && ok "  Symlink creado: ${wants_dir}/${svc}.service" \
@@ -464,7 +566,7 @@ EOF
     sudo tee "${sync_bin}" > /dev/null <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-SRC="/home/${REAL_USER}/.cache/wal"
+SRC="${REAL_HOME}/.cache/wal"
 DEST="${theme_path}"
 
 cp -f "\$SRC/sddm_background.jpg" "\$DEST/assets/background.jpg"
@@ -510,7 +612,7 @@ print_summary() {
     echo ""
     echo "  Pasos que se ejecutarán:"
     echo "    1. Instalar dependencias (pacman + ${aur_label})"
-    echo "    2. Instalar Caelestia (caelestia-cli-git + caelestia install)"
+    echo "    2. Instalar Caelestia (caelestia-cli + caelestia install, luego quickshell oficial)"
     echo "    3. Aplicar dotfiles personales (reemplazo total, conservando symlinks)"
     echo "    4. Configurar layout de teclado y sensibilidad del mouse"
     echo "    5. Crear ~/Pictures/wallpapers/1080p"
@@ -518,8 +620,8 @@ print_summary() {
     echo "    7. Configurar sincronización automática SDDM (wallpaper + colores)"
     echo ""
     echo -e "${YELLOW}  AVISO: Se instalarán paquetes y se modificará ~/.config${RESET}"
-    echo -e "${YELLOW}  RECUERDA: Tener Caelestia instalado${RESET}"
-    echo -e "  yay -S caelestia-shell y despues caelestia install"
+    echo -e "${YELLOW}  RECUERDA: Tener Caelestia instalado (caelestia-cli + caelestia install)${RESET}"
+    echo -e "  yay -S caelestia-cli y despues caelestia install"
     echo ""
 }
 
@@ -552,6 +654,7 @@ main() {
     check_distro
     detect_aur_helper
     resolve_real_user
+    check_caelestia
 
     print_summary
     ask "¿Deseas continuar con la instalación?" || { info "Instalación cancelada."; exit 0; }
@@ -560,6 +663,7 @@ main() {
     check_script_deps
 
     install_deps
+    configure_caelestia
     apply_dotfiles
     configure_input
     ensure_wallpaper_dir
