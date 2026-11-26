@@ -53,6 +53,17 @@ Quedan dos pasos manuales, ambos desde la GUI de Handy:
 La API key **nunca** se escribe en este directorio, en dotfiles ni en la
 consola: vive solo en los ajustes de Handy.
 
+## Pruebas
+```bash
+./tests/run-tests.sh            # todas (menos las que necesitan GUI)
+./tests/run-tests.sh --todo     # incluye el primer arranque con Handy real
+```
+Corren `configure_dictation()` contra un `$HOME` falso con stubs de
+`pacman`/`sudo`/`pgrep`, así que no tocan ni Handy ni `~/.config/hypr`.
+Comprueban el prompt y el hook contra los bloques de `dictado.md`, los ajustes,
+los atajos, el respaldo de `settings_store.json` y que la API key no se toca.
+En CI además se pasa ShellCheck a `install.sh` y a los scripts de `tests/`.
+
 ## Variables de entorno
 - `DOTS_REPO`: repo de dotfiles a clonar/aplicar. Default: `https://github.com/JoshuaCidbit/cachyos-hyprland-config.git`
 
