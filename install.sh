@@ -9,11 +9,17 @@
 #    3. Instala Caelestia vía AUR (caelestia-cli) + `caelestia install`
 #    4. Aplica dotfiles personales encima de Caelestia con rsync
 #    5. Configura layout de teclado y sensibilidad en hypr/modules/input.lua
-#    6. Crea ~/Pictures/wallpapers/1080p para evitar errores de wal
-#    7. Habilita servicios del sistema (sddm, bluetooth, NetworkManager, ufw)
+#    6. Configura dictado por voz (Handy): prompt, hook, vocabulario y atajos
+#    7. Crea ~/Pictures/wallpapers/1080p para evitar errores de wal
+#    8. Habilita servicios del sistema (sddm, bluetooth, NetworkManager, ufw)
+#    9. Configura la sincronización automática de SDDM (wallpaper + colores)
 #
 #  Uso:
 #    chmod +x install.sh && ./install.sh
+#    ./install.sh --solo-dictado    # solo (re)configura Handy
+#
+#  Dictado: la API key de OpenRouter se pega en la GUI de Handy, nunca aquí.
+#  Guía completa (prompt y hook incluidos): dictado.md junto a este script.
 # =============================================================================
 
 set -euo pipefail
@@ -174,6 +180,8 @@ install_deps() {
         # Misc
         uwsm
         wl-clipboard
+        wtype
+        gtk-layer-shell
         qpwgraph
 
         # Gamemode
@@ -203,6 +211,7 @@ install_deps() {
         grimblast-git
         pixie-sddm-git
         python-pywal16
+        handy-bin
     )
 
     info "  [pacman] Instalando paquetes oficiales..."
@@ -268,6 +277,7 @@ configure_caelestia() {
 # ── 3. Dotfiles personales ────────────────────────────────────────────────────
 DOTS_REPO="${DOTS_REPO:-https://github.com/JoshuaCidbit/cachyos-hyprland-config.git}"
 CONFIG_DIR="${HOME}/.config"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 apply_dotfiles() {
     BACKUP_DIR="${HOME}/.config-backup-$(date +%Y%m%d_%H%M%S)"
@@ -405,14 +415,299 @@ configure_input() {
     fi
 }
 
-# ── 5. Carpeta de wallpapers ──────────────────────────────────────────────────
+# ── 5. Dictado por voz (Handy) ────────────────────────────────────────────────
+# Deja el dictado listo: paquetes, prompt de limpieza, hook, vocabulario ASR,
+# ajustes no secretos y atajos. La API key de OpenRouter NUNCA se escribe aquí:
+# se pega una sola vez en la GUI de Handy. Guía completa: dictado.md.
+configure_dictation() {
+    local DICTADO_DIR="${REAL_HOME}/.local/share/com.pais.handy"
+
+    info "Configurando dictado por voz (Handy)..."
+
+    if ! ask "¿Instalar y configurar dictado (Handy + limpieza por LLM)?"; then
+        info "  Omitido. Puedes ejecutarlo luego con: ./install.sh --solo-dictado"
+        return 0
+    fi
+
+    local md_file="${SCRIPT_DIR}/dictado.md"
+    if [[ ! -f "${md_file}" ]]; then
+        warn "No se encontró ${md_file}: no puedo aplicar prompt ni hook."
+        return 0
+    fi
+
+    # ── Paquetes ─────────────────────────────────────────────────────────────
+    local sys_missing=()
+    for pkg in gtk-layer-shell wtype wl-clipboard; do
+        pacman -Q "${pkg}" &>/dev/null || sys_missing+=("${pkg}")
+    done
+    if [[ ${#sys_missing[@]} -gt 0 ]]; then
+        info "  Instalando paquetes del sistema: ${sys_missing[*]}"
+        sudo pacman -S --needed --noconfirm "${sys_missing[@]}"
+    fi
+    if ! pacman -Q handy-bin &>/dev/null; then
+        info "  Instalando handy-bin (AUR)..."
+        "${AUR_HELPER}" -S --needed --noconfirm handy-bin
+    fi
+    ok "  handy-bin $(pacman -Q handy-bin | awk '{print $2}')"
+
+    # ── Prompt y hook desde dictado.md (fuente única) ────────────────────────
+    local tmp_dir tmp_prompt tmp_hook
+    tmp_dir="$(mktemp -d)"
+    tmp_prompt="${tmp_dir}/prompt.txt"
+    tmp_hook="${tmp_dir}/hook.sh"
+
+    if ! python3 - "${md_file}" "${tmp_prompt}" "${tmp_hook}" <<'PY'
+import re
+import sys
+
+md, out_prompt, out_hook = sys.argv[1:4]
+src = open(md, encoding="utf-8").read()
+
+
+def bloque(tag):
+    patron = r"<!-- handy:%s:begin -->\s*```[a-zA-Z]*\n(.*?)\n```\s*<!-- handy:%s:end -->" % (tag, tag)
+    m = re.search(patron, src, re.S)
+    if not m:
+        sys.exit("falta el bloque %s en %s" % (tag, md))
+    return m.group(1)
+
+
+prompt = bloque("prompt")
+hook = bloque("hook")
+if prompt.count("${output}") != 1:
+    sys.exit("el prompt no contiene ${output} exactamente una vez")
+if len(prompt) < 6000:
+    sys.exit("el prompt parece truncado (%d chars)" % len(prompt))
+if not hook.startswith("#!"):
+    sys.exit("el hook no empieza por shebang")
+open(out_prompt, "w", encoding="utf-8").write(prompt.rstrip("\n") + "\n")
+open(out_hook, "w", encoding="utf-8").write(hook.rstrip("\n") + "\n")
+PY
+    then
+        warn "  No se pudo extraer prompt/hook de ${md_file} (¿marcadores rotos?)."
+        rm -rf "${tmp_dir}"
+        return 0
+    fi
+
+    mkdir -p "${DICTADO_DIR}/hooks"
+    install -m 0755 "${tmp_hook}" "${DICTADO_DIR}/hooks/transcription"
+    ok "  Hook instalado: ${DICTADO_DIR}/hooks/transcription"
+
+    # ── settings_store.json (solo campos no secretos) ───────────────────────
+    local settings="${DICTADO_DIR}/settings_store.json"
+    if [[ ! -f "${settings}" ]] && command -v handy &>/dev/null && [[ "$(id -un)" == "${REAL_USER}" ]]; then
+        info "  Primer arranque de Handy para que cree su configuración..."
+        setsid -f env HOME="${REAL_HOME}" XDG_DATA_HOME="${REAL_HOME}/.local/share" XDG_CONFIG_HOME="${REAL_HOME}/.config" XDG_CACHE_HOME="${REAL_HOME}/.cache" handy --start-hidden >/dev/null 2>&1 &
+        for _ in {1..60}; do
+            [[ -f "${settings}" ]] && break
+            sleep 0.5
+        done
+    fi
+
+    if [[ ! -f "${settings}" ]]; then
+        warn "  Handy todavía no ha creado ${settings}."
+        warn "  Abre Handy una vez, completa el onboarding y ejecuta: ./install.sh --solo-dictado"
+    else
+        local handy_estaba=0
+        if pgrep -x handy &>/dev/null; then
+            handy_estaba=1
+            info "  Cerrando Handy para editar su configuración..."
+            pkill -x handy || true
+            for _ in {1..20}; do
+                pgrep -x handy &>/dev/null || break
+                sleep 0.5
+            done
+        fi
+
+        local backup="${settings}.bak.$(date +%Y%m%dT%H%M%S)"
+        cp -p "${settings}" "${backup}"
+        ok "  Respaldo: ${backup}"
+
+        python3 - "${settings}" "${tmp_prompt}" <<'PY'
+import json
+import sys
+
+ruta, prompt_file = sys.argv[1:3]
+prompt = open(prompt_file, encoding="utf-8").read()
+st = json.load(open(ruta, encoding="utf-8"))
+s = st.setdefault("settings", {})
+
+# Prompt de limpieza (mismo id que usan los atajos y history.db)
+pid = "es_limpieza_dictado"
+prompts = s.setdefault("post_process_prompts", [])
+for p in prompts:
+    if p.get("id") == pid:
+        p["prompt"] = prompt
+        break
+else:
+    prompts.append({"id": pid, "name": "Limpieza de dictado (es)", "prompt": prompt})
+s["post_process_selected_prompt_id"] = pid
+
+# Proveedor Custom = camino legacy: Handy reemplaza ${output} en el prompt.
+prov = {
+    "id": "custom",
+    "label": "Custom",
+    "base_url": "https://openrouter.ai/api/v1",
+    "allow_base_url_edit": True,
+    "models_endpoint": "/models",
+    "supports_structured_output": False,
+    "api_format": "openai",
+}
+provs = s.setdefault("post_process_providers", [])
+for p in provs:
+    if p.get("id") == "custom":
+        p.update(prov)
+        break
+else:
+    provs.append(prov)
+s["post_process_provider_id"] = "custom"
+s.setdefault("post_process_models", {})["custom"] = "nvidia/nemotron-3.5-lightning:free"
+
+deseados = {
+    "paste_method": "ctrl_v",
+    "clipboard_handling": "copy_to_clipboard",
+    "paste_delay_after_ms": 150,
+    "filler_word_removal_enabled": True,
+    "custom_filler_words": None,
+    "custom_words": ["Students", "AWS", "CI/CD", "GitHub", "SQLite", "AGENTS", "README"],
+    # Preferencias de la configuración de referencia (máquina nueva = defaults)
+    "post_process_enabled": True,
+    "app_language": "es-ES",
+    "selected_language": "auto",
+    "spoken_languages": ["es", "en"],
+    "autostart_enabled": True,
+    "append_trailing_space": True,
+    "start_hidden": True,
+    "overlay_style": "minimal",
+    "onboarding_completed": True,
+    "shortcut_activation": "toggle",
+    "history_limit": 20,
+    "experimental_enabled": True,
+}
+omitidos = [k for k in deseados if k not in s]
+for k, v in deseados.items():
+    if k in s:
+        s[k] = v
+
+# Atajo interno de Handy (el global lo pone Hyprland): mismo que la referencia
+t = s.get("bindings", {}).get("transcribe")
+if isinstance(t, dict) and "current_binding" in t:
+    t["current_binding"] = "ctrl+shift+d"
+
+json.dump(st, open(ruta, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+print("  prompt: %d chars, ${output}: %d vez/veces" % (len(prompt), prompt.count("${output}")))
+print("  modelo: %s" % s["post_process_models"]["custom"])
+if omitidos:
+    print("  claves ausentes (sin tocar): %s" % ", ".join(omitidos))
+PY
+
+        if [[ ${handy_estaba} -eq 1 ]]; then
+            if [[ "${REAL_USER}" == "$(id -un)" ]]; then
+                info "  Reabriendo Handy..."
+                setsid -f env HOME="${REAL_HOME}" XDG_DATA_HOME="${REAL_HOME}/.local/share" XDG_CONFIG_HOME="${REAL_HOME}/.config" XDG_CACHE_HOME="${REAL_HOME}/.cache" handy --start-hidden >/dev/null 2>&1 &
+            else
+                warn "  Handy se cerró para editar: ábrelo de nuevo desde tu sesión."
+            fi
+        fi
+    fi
+
+    # ── Atajos ───────────────────────────────────────────────────────────────
+    local cfg_dir="${REAL_HOME}/.config"
+    local vars_file="${cfg_dir}/hypr/variables.lua"
+    local binds_file="${cfg_dir}/hypr/hyprland/keybinds.lua"
+
+    if [[ -f "${vars_file}" ]] && ! grep -q "kbDictado" "${vars_file}"; then
+        if python3 - "${vars_file}" <<'PY'
+import re
+import sys
+
+ruta = sys.argv[1]
+src = open(ruta, encoding="utf-8").read()
+ancla = re.search(r"^(\s*)kbWindowFullscreen\s*=\s*[^\n]*\n", src, re.M)
+if not ancla:
+    sys.exit("sin ancla kbWindowFullscreen")
+ind = ancla.group(1)
+nuevas = (ind + 'kbDictado                  = "SUPER + SHIFT + D",\n'
+          + ind + 'kbDictadoCrudo             = "SUPER + SHIFT + ALT + D",\n')
+open(ruta, "w", encoding="utf-8").write(src[:ancla.end()] + nuevas + src[ancla.end():])
+PY
+        then
+            ok "  Atajos añadidos a variables.lua"
+        else
+            warn "  No se pudo editar variables.lua; añade kbDictado a mano (dictado.md §9)."
+        fi
+    else
+        ok "  kbDictado ya presente (o variables.lua no existe)"
+    fi
+
+    if [[ -f "${binds_file}" ]] && ! grep -q "kbDictado" "${binds_file}"; then
+        if python3 - "${binds_file}" <<'PY'
+import re
+import sys
+
+ruta = sys.argv[1]
+src = open(ruta, encoding="utf-8").read()
+ancla = re.search(r"^[^\n]*kbWindowFullscreen[^\n]*\n", src, re.M)
+if not ancla:
+    sys.exit("sin ancla kbWindowFullscreen")
+nuevas = ('hl.bind(vars.kbDictado, hl.dsp.exec_cmd("handy --toggle-post-process"))\n'
+          + 'hl.bind(vars.kbDictadoCrudo, hl.dsp.exec_cmd("handy --toggle-transcription"))\n')
+open(ruta, "w", encoding="utf-8").write(src[:ancla.end()] + nuevas + src[ancla.end():])
+PY
+        then
+            ok "  Atajos añadidos a keybinds.lua"
+        else
+            warn "  No se pudo editar keybinds.lua; añade los binds a mano (dictado.md §9)."
+        fi
+    else
+        ok "  binds de dictado ya presentes (o keybinds.lua no existe)"
+    fi
+
+    if command -v hyprctl &>/dev/null && [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+        if hyprctl reload &>/dev/null; then
+            ok "  Hyprland recargado"
+        else
+            warn "  hyprctl reload falló; recarga a mano"
+        fi
+    else
+        warn "  Sesión de Hyprland no detectada: los atajos aplican al reiniciar."
+    fi
+
+    # ── Comprobación determinista del hook ──────────────────────────────────
+    local ruido legit
+    ruido="$(printf 'eh mm este' | "${DICTADO_DIR}/hooks/transcription")"
+    legit="$(printf 'Hola buenas tardes.' | "${DICTADO_DIR}/hooks/transcription")"
+    if [[ -z "${ruido}" && "${legit}" == "Hola buenas tardes." ]]; then
+        ok "  Hook: ruido→vacío y texto legítimo intacto (2/2)"
+    else
+        warn "  Hook con resultado inesperado: ruido='${ruido}' legit='${legit}'"
+    fi
+
+    # ── GPU/CPU ─────────────────────────────────────────────────────────────
+    if command -v lspci &>/dev/null && lspci 2>/dev/null | grep -qi "nvidia"; then
+        ok "  GPU NVIDIA detectada: usa Whisper Large v3 Turbo (Vulkan)"
+    else
+        ok "  Sin GPU NVIDIA detectada: usa Parakeet Ultra o Canary 180M (CPU)"
+    fi
+    warn "  La descarga del modelo ASR se hace en la GUI de Handy (dictado.md §3)."
+
+    rm -rf "${tmp_dir}"
+    echo ""
+    echo -e "  ${YELLOW}Pendiente (solo tú): pegar la API key en Handy.${RESET}"
+    echo "     Handy → Ajustes → Post-Processing → proveedor Custom → API key."
+    echo "     Modelo sugerido: nvidia/nemotron-3.5-lightning:free"
+    echo "     La key no va al repo, ni a dotfiles, ni a la consola."
+    echo ""
+}
+
+# ── 6. Carpeta de wallpapers ──────────────────────────────────────────────────
 ensure_wallpaper_dir() {
     info "Creando carpeta de wallpapers (si no existe)..."
     mkdir -p "${HOME}/Pictures/wallpapers/1080p"
     ok "  ${HOME}/Pictures/wallpapers/1080p lista."
 }
 
-# ── 6. Servicios del sistema ──────────────────────────────────────────────────
+# ── 7. Servicios del sistema ──────────────────────────────────────────────────
 enable_services() {
     info "Habilitando servicios del sistema..."
 
@@ -537,7 +832,7 @@ enable_services() {
     fi
 }
 
-# ── 7. Sincronización de wallpaper/colores con SDDM (theme pixie) ────────────
+# ── 8. Sincronización de wallpaper/colores con SDDM (theme pixie) ────────────
 SDDM_THEME_NAME="pixie"
 
 configure_sddm_sync() {
@@ -615,9 +910,10 @@ print_summary() {
     echo "    2. Instalar Caelestia (caelestia-cli + caelestia install, luego quickshell oficial)"
     echo "    3. Aplicar dotfiles personales (reemplazo total, conservando symlinks)"
     echo "    4. Configurar layout de teclado y sensibilidad del mouse"
-    echo "    5. Crear ~/Pictures/wallpapers/1080p"
-    echo "    6. Habilitar/(re)iniciar servicios del sistema"
-    echo "    7. Configurar sincronización automática SDDM (wallpaper + colores)"
+    echo "    5. Configurar dictado por voz (Handy + prompt, hook y atajos)"
+    echo "    6. Crear ~/Pictures/wallpapers/1080p"
+    echo "    7. Habilitar/(re)iniciar servicios del sistema"
+    echo "    8. Configurar sincronización automática SDDM (wallpaper + colores)"
     echo ""
     echo -e "${YELLOW}  AVISO: Se instalarán paquetes y se modificará ~/.config${RESET}"
     echo -e "${YELLOW}  RECUERDA: Tener Caelestia instalado (caelestia-cli + caelestia install)${RESET}"
@@ -640,7 +936,18 @@ print_done() {
     echo -e "  ${BOLD}2. Agregar wallpapers${RESET} para el launcher de Caelestia:"
     echo "     ~/Pictures/wallpapers/1080p/"
     echo ""
-    echo -e "  ${BOLD}3. Reiniciar sesión${RESET} (logout o reboot) para cargar Hyprland con SDDM."
+    echo -e "  ${BOLD}3. Terminar de configurar el dictado (Handy)${RESET}:"
+    echo "     a) Abre Handy (icono de bandeja) → Ajustes → Modelos y descarga el ASR:"
+    echo "        Whisper Large v3 Turbo si hay GPU NVIDIA; Parakeet Ultra o"
+    echo "        Canary 180M Flash en CPU."
+    echo "     b) Pega una API key de OpenRouter (o de un proveedor aceptado) en"
+    echo "        Ajustes → Post-Processing → proveedor Custom."
+    echo -e "        Modelo de limpieza sugerido: ${BOLD}nvidia/nemotron-3.5-lightning:free${RESET}"
+    echo "     - Sin key sigue funcionando el dictado crudo (SUPER+SHIFT+ALT+D)."
+    echo "     - Si algo no se aplicó: ./install.sh --solo-dictado"
+    echo "     - Guía completa: dictado.md (junto a este script)."
+    echo ""
+    echo -e "  ${BOLD}4. Reiniciar sesión${RESET} (logout o reboot) para cargar Hyprland con SDDM."
     echo ""
     if [[ -n "${BACKUP_DIR}" && -d "${BACKUP_DIR}" ]]; then
         echo -e "  ${YELLOW}Tus configs anteriores están en: ${BACKUP_DIR}${RESET}"
@@ -654,6 +961,13 @@ main() {
     check_distro
     detect_aur_helper
     resolve_real_user
+
+    if [[ "${1:-}" == "--solo-dictado" ]]; then
+        info "Modo --solo-dictado: configura solo Handy (prompt, hook, ajustes y atajos)."
+        configure_dictation
+        exit 0
+    fi
+
     check_caelestia
 
     print_summary
@@ -666,6 +980,7 @@ main() {
     configure_caelestia
     apply_dotfiles
     configure_input
+    configure_dictation
     ensure_wallpaper_dir
     enable_services
     configure_sddm_sync
