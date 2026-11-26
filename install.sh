@@ -519,7 +519,8 @@ PY
             done
         fi
 
-        local backup="${settings}.bak.$(date +%Y%m%dT%H%M%S)"
+        local backup
+        backup="${settings}.bak.$(date +%Y%m%dT%H%M%S)"
         cp -p "${settings}" "${backup}"
         ok "  Respaldo: ${backup}"
 
